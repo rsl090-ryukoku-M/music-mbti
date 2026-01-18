@@ -1,0 +1,356 @@
+from __future__ import annotations
+import os
+import secrets
+import { ImageResponse } from "next/og";
+import fs from "node:fs/promises";
+
+export const runtime = "nodejs";
+export const size = { width: 1200, height: 630 };
+export const contentType = "image/png";
+
+async function loadJPFont(): Promise<Buffer> {
+  #✅ TTFのみ（TTCはttcfで落ちる）
+  return await fs.readFile("/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf");
+}
+
+export default async function Image({
+  params,
+}: {
+  params: Promise<{ username: string }>;
+}) {
+  const { username } = await params;
+
+  const res = await fetch(`http://127.0.0.1:8000/api/result/${username}`, { cache: "no-store" });
+  const data = await res.json();
+
+  const title = data?.type_info?.name ?? data?.type_code ?? "Music Type";
+  const tagline = data?.type_info?.tagline ?? "";
+  const chips: string[] = data?.type_info?.axes ? Object.values(data.type_info.axes) : [];
+  const display = data?.display_name ?? username;
+  const code = data?.type_code ?? "";
+
+  const fontData = await loadJPFont();
+
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: "1200px",
+          height: "630px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "linear-gradient(135deg, #FFE3F1 0%, #E7F3FF 45%, #E9FFE9 100%)",
+          padding: "64px",
+          fontFamily: "JP",
+        }}
+      >
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            borderRadius: 40,
+            background: "rgba(255,255,255,0.78)",
+            border: "2px solid rgba(255,255,255,0.9)",
+            boxShadow: "0 30px 90px rgba(0,0,0,0.12)",
+            padding: "56px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", fontSize: 26, opacity: 0.7 }}>Tuneee（仮）</div>
+              <div style={{ display: "flex", fontSize: 18, opacity: 0.55 }}>music taste card</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", width: 18, height: 18, borderRadius: 999, background: "rgba(255,105,180,0.65)" }} />
+              <div style={{ display: "flex", width: 18, height: 18, borderRadius: 999, background: "rgba(120,170,255,0.65)" }} />
+              <div style={{ display: "flex", width: 18, height: 18, borderRadius: 999, background: "rgba(130,220,160,0.65)" }} />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", marginTop: 12 }}>
+            <div style={{ display: "flex", fontSize: 70, fontWeight: 900, lineHeight: 1.05 }}>
+              {title}
+            </div>
+
+            <div style={{ display: "flex", fontSize: 34, marginTop: 16, opacity: 0.85 }}>
+              {tagline}
+            </div>
+
+            <div style={{ display: "flex", gap: 14, marginTop: 26, flexWrap: "wrap" }}>
+              {chips.map((c, i) => (
+                <div
+                  key={i}
+                  style={{
+                    display: "flex",
+                    fontSize: 26,
+                    padding: "10px 16px",
+                    borderRadius: 999,
+                    background: "rgba(255,255,255,0.9)",
+                    border: "1px solid rgba(0,0,0,0.08)",
+                    boxShadow: "0 10px 22px rgba(0,0,0,0.08)",
+                  }}
+                >
+                  {c}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+            <div style={{ display: "flex", gap: 8, fontSize: 26, opacity: 0.75 }}>
+              <span style={{ fontWeight: 800 }}>{display}</span>
+              <span style={{ opacity: 0.6 }}>/ {code}</span>
+            </div>
+
+            <div style={{ display: "flex", fontSize: 18, opacity: 0.55 }}>
+              {new Date().toISOString().slice(0, 10)}
+            </div>
+          </div>
+        </div>
+      </div>
+    ),
+    {
+      ...size,
+      fonts: [{ name: "JP", data: fontData, style: "normal" }],
+    }
+  );
+}
+
+from datetime import datetime, timezone
+
+from django.http import JsonResponse, HttpResponseBadRequest
+from django.shortcuts import redirect
+from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth import login
+from django.contrib.auth.models import User
+
+from .models import SpotifyAccount, DiagnosisResult
+from .spotify import (
+    exchange_code_for_tokens,
+    refresh_access_token,
+    get_me,
+    get_top_tracks,
+    get_audio_features,
+)
+from .diagnosis import compute_scores, scores_to_type_code, pick_sample_tracks
+from .diagnosis_text import describe_type
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default)
+
+
+# ---------- Spotify (後で復活させる用に残す) ----------
+@require_GET
+def spotify_connect_url(request):
+    client_id = _env("SPOTIFY_CLIENT_ID")
+    redirect_uri = _env("SPOTIFY_REDIRECT_URI")
+    if not client_id or not redirect_uri:
+        return HttpResponseBadRequest("Missing SPOTIFY_CLIENT_ID or SPOTIFY_REDIRECT_URI")
+
+    state = secrets.token_urlsafe(16)
+    request.session["spotify_oauth_state"] = state
+
+    scope = "user-top-read"
+    auth_url = (
+        "https://accounts.spotify.com/authorize"
+        f"?response_type=code"
+        f"&client_id={client_id}"
+        f"&scope={scope}"
+        f"&redirect_uri={redirect_uri}"
+        f"&state={state}"
+    )
+    return JsonResponse({"auth_url": auth_url})
+
+
+@require_GET
+def spotify_callback(request):
+    code = request.GET.get("code")
+    state = request.GET.get("state")
+    saved_state = request.session.get("spotify_oauth_state")
+    if not code or not state or state != saved_state:
+        return HttpResponseBadRequest("Invalid OAuth state/code")
+
+    client_id = _env("SPOTIFY_CLIENT_ID")
+    client_secret = _env("SPOTIFY_CLIENT_SECRET")
+    redirect_uri = _env("SPOTIFY_REDIRECT_URI")
+    frontend_origin = _env("FRONTEND_ORIGIN", "http://localhost:3000")
+
+    tokens = exchange_code_for_tokens(client_id, client_secret, redirect_uri, code)
+    me = get_me(tokens.access_token)
+    spotify_user_id = me["id"]
+
+    username = f"sp_{spotify_user_id}"
+    display_name = me.get("display_name") or username
+
+    user, _ = User.objects.get_or_create(username=username, defaults={"first_name": display_name})
+    user.set_unusable_password()
+    user.save()
+
+    acc, created = SpotifyAccount.objects.get_or_create(
+        spotify_user_id=spotify_user_id,
+        defaults={
+            "user": user,
+            "access_token": tokens.access_token,
+            "refresh_token": tokens.refresh_token,
+            "token_expires_at": tokens.expires_at,
+        },
+    )
+    if not created:
+        acc.user = user
+        acc.access_token = tokens.access_token
+        if tokens.refresh_token:
+            acc.refresh_token = tokens.refresh_token
+        acc.token_expires_at = tokens.expires_at
+        acc.save()
+
+    login(request, user)
+    return redirect(f"{frontend_origin}/diagnosis")
+
+
+def _ensure_fresh_token(acc: SpotifyAccount) -> SpotifyAccount:
+    now = datetime.now(timezone.utc)
+    if acc.token_expires_at <= now:
+        tokens = refresh_access_token(
+            _env("SPOTIFY_CLIENT_ID"),
+            _env("SPOTIFY_CLIENT_SECRET"),
+            acc.refresh_token,
+        )
+        acc.access_token = tokens.access_token
+        acc.token_expires_at = tokens.expires_at
+        acc.save()
+    return acc
+
+
+# ---------- Dev login (疑似ログイン) ----------
+@csrf_exempt
+@require_GET
+def fake_login(request):
+    user, _ = User.objects.get_or_create(
+        username="dev_user",
+        defaults={"first_name": "Dev User"},
+    )
+    user.set_unusable_password()
+    user.save()
+    login(request, user)
+    return JsonResponse({"ok": True, "username": user.username})
+
+
+# ---------- Diagnose (いまはダミー。後でSpotify版に差し替え) ----------
+@csrf_exempt
+@require_POST
+def diagnose(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({"error": "unauthorized"}, status=401)
+
+    # --- dev fallback（Spotifyなくても進める）---
+    # Spotifyがつながってない場合は、seedでダミー生成
+    try:
+        _ = request.user.spotify
+        spotify_connected = True
+    except SpotifyAccount.DoesNotExist:
+        spotify_connected = False
+
+    if not spotify_connected:
+        scores = seeded_scores(request.user.username)
+        type_code = scores_to_type_code(scores)
+        type_info = describe_type(type_code)
+        sample_ids = ["dummy1", "dummy2", "dummy3"]
+
+        DiagnosisResult.objects.create(
+            user=request.user,
+            energy_score=scores["energy_score"],
+            mood_score=scores["mood_score"],
+            texture_score=scores["texture_score"],
+            explore_score=scores["explore_score"],
+            type_code=type_code,
+            sample_track_ids=sample_ids,
+        )
+
+        return JsonResponse({
+            "username": request.user.username,
+            "type_code": type_code,
+            "type_info": type_info,
+            "scores": scores,
+            "sample_track_ids": sample_ids,
+            "result_path": f"/result/{request.user.username}",
+        })
+
+    # --- ここから先はSpotify復活後に使う本番処理（いまは未使用でもOK）---
+    acc = _ensure_fresh_token(request.user.spotify)
+    top = get_top_tracks(acc.access_token, limit=50, time_range="medium_term")
+    items = top.get("items", [])
+    track_ids = [t["id"] for t in items if t.get("id")]
+    feats = get_audio_features(acc.access_token, track_ids).get("audio_features", [])
+
+    scores = compute_scores(items, feats)
+    type_code = scores_to_type_code(scores)
+    type_info = describe_type(type_code)
+    sample_ids = pick_sample_tracks(items, feats, type_code)
+
+    DiagnosisResult.objects.create(
+        user=request.user,
+        energy_score=scores["energy_score"],
+        mood_score=scores["mood_score"],
+        texture_score=scores["texture_score"],
+        explore_score=scores["explore_score"],
+        type_code=type_code,
+        sample_track_ids=sample_ids,
+    )
+
+    return JsonResponse({
+        "username": request.user.username,
+        "type_code": type_code,
+        "type_info": type_info,
+        "scores": scores,
+        "sample_track_ids": sample_ids,
+        "result_path": f"/result/{request.user.username}",
+    })
+
+
+# ---------- Result JSON ----------
+@require_GET
+def result_json(request, username: str):
+    user = User.objects.filter(username=username).first()
+    if not user:
+        return JsonResponse({"error": "not_found"}, status=404)
+
+    latest = user.diagnoses.order_by("-computed_at").first()
+    if not latest:
+        return JsonResponse({"error": "no_result"}, status=404)
+
+    return JsonResponse({
+        "username": user.username,
+        "display_name": user.first_name or user.username,
+        "computed_at": latest.computed_at.isoformat(),
+        "type_code": latest.type_code,
+        "type_info": describe_type(latest.type_code),
+        "scores": {
+            "energy": latest.energy_score,
+            "mood": latest.mood_score,
+            "texture": latest.texture_score,
+            "explore": latest.explore_score,
+        },
+        "sample_track_ids": latest.sample_track_ids,
+    })
+
+def seeded_scores(username: str) -> dict[str, float]:
+    # 0.00〜0.99 の値を4つ作る（ユーザーごとに固定）
+    h = hashlib.sha256(username.encode("utf-8")).digest()
+    vals = [h[i] / 255.0 for i in range(4)]
+    # ちょい中央寄せ（極端になりすぎないように）
+    vals = [0.15 + v * 0.7 for v in vals]
+    return {
+        "energy_score": round(vals[0], 2),
+        "mood_score": round(vals[1], 2),
+        "texture_score": round(vals[2], 2),
+        "explore_score": round(vals[3], 2),
+    }
+
+
