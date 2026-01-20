@@ -36,9 +36,7 @@ function Slider({
     <div style={{ marginTop: 10 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, opacity: 0.8 }}>
         <span>{label}</span>
-        <span>
-          {left} ←→ {right}
-        </span>
+        <span>{left} ←→ {right}</span>
       </div>
       <input
         type="range"
@@ -55,31 +53,16 @@ function Slider({
 export default function DiagnosisPage() {
   const router = useRouter();
 
+  const [username, setUsername] = useState("");          // ★追加
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Track[]>([]);
   const [selected, setSelected] = useState<Selected[]>([]);
   const [msg, setMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const didInit = useRef(false); // StrictMode / Turbopack対策
-  const canDiagnose = selected.length >= 5;
+  const didInit = useRef(false);
 
-  // ✅ APIに送るpayloadをここで確定させる（これが「完全版」の肝）
-  const payload = {
-    username: "test", // 本番は入力欄を作って変えられるようにしてもOK
-    tracks: selected.map((t) => ({
-      id: t.id,
-      title: t.title,
-      artist: t.artist,
-      artwork: t.artwork,
-      preview_url: t.preview_url,
-      external_url: t.external_url,
-      tempo: t.tempo,
-      bright: t.bright,
-      electro: t.electro,
-      explore: t.explore,
-    })),
-  };
+  const canDiagnose = selected.length >= 5 && username.trim().length > 0;
 
   async function fetchTracks(query: string) {
     setIsLoading(true);
@@ -109,7 +92,7 @@ export default function DiagnosisPage() {
 
     (async () => {
       try {
-        // devログイン（cookie確保） ※今はダミーでもOK
+        // devログイン（cookie確保）
         const loginRes = await fetch("/api/dev/login", { credentials: "include" });
         if (!loginRes.ok) {
           setMsg(`login failed: ${await loginRes.text()}`);
@@ -126,10 +109,7 @@ export default function DiagnosisPage() {
 
   function addTrack(t: Track) {
     if (selected.some((x) => x.id === t.id)) return;
-    setSelected((prev) => [
-      ...prev,
-      { ...t, tempo: 0.5, bright: 0.5, electro: 0.5, explore: 0.5 },
-    ]);
+    setSelected((prev) => [...prev, { ...t, tempo: 0.5, bright: 0.5, electro: 0.5, explore: 0.5 }]);
   }
 
   function removeTrack(id: string) {
@@ -141,12 +121,21 @@ export default function DiagnosisPage() {
   }
 
   async function diagnose() {
-    if (!canDiagnose) {
-      setMsg("5曲以上選んでください");
-      return;
-    }
-
     setMsg("診断中...");
+
+    const payload = {
+      username: username.trim(),
+      tracks: selected.map((t) => ({
+        id: t.id,
+        tempo: t.tempo,
+        bright: t.bright,
+        electro: t.electro,
+        explore: t.explore,
+        title: t.title,   // 送ってもOK（API側で使いたければ）
+        artist: t.artist,
+      })),
+    };
+
     try {
       const res = await fetch("/api/diagnose_from_tracks", {
         method: "POST",
@@ -157,7 +146,6 @@ export default function DiagnosisPage() {
 
       const data = await res.json().catch(() => ({}));
 
-      // ✅ 失敗レスポンスはここで止める
       if (!res.ok || !data?.result_path) {
         setMsg(data?.message ?? data?.error ?? "diagnose failed");
         return;
@@ -175,6 +163,20 @@ export default function DiagnosisPage() {
       <p style={{ opacity: 0.8 }}>
         曲を追加して診断できます（初期はおすすめ表示）。最低5曲がおすすめ。
       </p>
+
+      {/* ★ユーザー名入力 */}
+      <section style={{ marginTop: 16 }}>
+        <h2>名前（結果URLに使う）</h2>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="例: kaede"
+          style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+        />
+        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>
+          ここに入れた名前で /result/◯◯ のURLが作られます
+        </div>
+      </section>
 
       <section style={{ marginTop: 18 }}>
         <h2>曲を検索</h2>
@@ -328,7 +330,9 @@ export default function DiagnosisPage() {
           >
             診断する
           </button>
-          <span style={{ opacity: 0.75 }}>{msg}</span>
+          <span style={{ opacity: 0.75 }}>
+            {!username.trim() ? "名前を入力してね" : selected.length < 5 ? "5曲以上選んでね" : msg}
+          </span>
         </div>
       </section>
     </main>
