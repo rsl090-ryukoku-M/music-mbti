@@ -216,45 +216,5 @@ export default async function ResultPage({ params }: Props) {
   );
 }
 
-<div style={{ marginTop: 24, display: "grid", gap: 12 }}>
-  <h3 style={{ fontSize: 16, fontWeight: 700 }}>応援（投げ銭）</h3>
 
-  <a
-    href="https://buy.stripe.com/XXXXXXXXXXXXXX"  // 300円リンク
-    target="_blank"
-    rel="noopener noreferrer"
-    style={{
-      padding: "12px 16px",
-      borderRadius: 12,
-      border: "1px solid #ddd",
-      textAlign: "center",
-      fontWeight: 700,
-      textDecoration: "none",
-      display: "block",
-    }}
-  >
-    ¥300で応援する
-  </a>
-
-  <a
-    href="https://buy.stripe.com/YYYYYYYYYYYYYY"  // 500円リンク
-    target="_blank"
-    rel="noopener noreferrer"
-    style={{
-      padding: "12px 16px",
-      borderRadius: 12,
-      border: "1px solid #ddd",
-      textAlign: "center",
-      fontWeight: 700,
-      textDecoration: "none",
-      display: "block",
-    }}
-  >
-    ¥500で応援する
-  </a>
-
-  <p style={{ fontSize: 12, opacity: 0.8 }}>
-    支払いはStripeの安全な決済画面で行われます。
-  </p>
-</div>
 
