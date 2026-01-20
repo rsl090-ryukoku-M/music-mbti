@@ -12,7 +12,12 @@ type Track = {
   external_url?: string;
 };
 
-type Selected = Track & { tempo: number; bright: number; electro: number; explore: number };
+type Selected = Track & {
+  tempo: number;
+  bright: number;
+  electro: number;
+  explore: number;
+};
 
 function Slider({
   label,
@@ -56,9 +61,25 @@ export default function DiagnosisPage() {
   const [msg, setMsg] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const didInit = useRef(false); // ✅ StrictMode / Turbopack対策（初回だけ実行）
-
+  const didInit = useRef(false); // StrictMode / Turbopack対策
   const canDiagnose = selected.length >= 5;
+
+  // ✅ APIに送るpayloadをここで確定させる（これが「完全版」の肝）
+  const payload = {
+    username: "test", // 本番は入力欄を作って変えられるようにしてもOK
+    tracks: selected.map((t) => ({
+      id: t.id,
+      title: t.title,
+      artist: t.artist,
+      artwork: t.artwork,
+      preview_url: t.preview_url,
+      external_url: t.external_url,
+      tempo: t.tempo,
+      bright: t.bright,
+      electro: t.electro,
+      explore: t.explore,
+    })),
+  };
 
   async function fetchTracks(query: string) {
     setIsLoading(true);
@@ -67,7 +88,7 @@ export default function DiagnosisPage() {
       const res = await fetch(`/api/tracks/search?q=${encodeURIComponent(query)}`, {
         cache: "no-store",
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setMsg(`search failed: ${JSON.stringify(data, null, 2)}`);
         setResults([]);
@@ -88,14 +109,14 @@ export default function DiagnosisPage() {
 
     (async () => {
       try {
-        // ✅ 1) devログイン（cookie確保）
+        // devログイン（cookie確保） ※今はダミーでもOK
         const loginRes = await fetch("/api/dev/login", { credentials: "include" });
         if (!loginRes.ok) {
           setMsg(`login failed: ${await loginRes.text()}`);
           return;
         }
 
-        // ✅ 2) 初期おすすめ（空検索）
+        // 初期おすすめ（空検索）
         await fetchTracks("");
       } catch (e: any) {
         setMsg(`init error: ${e?.message ?? String(e)}`);
@@ -120,29 +141,25 @@ export default function DiagnosisPage() {
   }
 
   async function diagnose() {
+    if (!canDiagnose) {
+      setMsg("5曲以上選んでください");
+      return;
+    }
+
     setMsg("診断中...");
     try {
       const res = await fetch("/api/diagnose_from_tracks", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tracks: selected.map((t) => ({
-            id: t.id,
-            title: t.title,
-            artist: t.artist,
-            tempo: t.tempo,
-            bright: t.bright,
-            electro: t.electro,
-            explore: t.explore,
-          })),
-        }),
+        body: JSON.stringify(payload),
+        credentials: "include",
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        setMsg(`diagnose failed: ${JSON.stringify(data, null, 2)}`);
+      // ✅ 失敗レスポンスはここで止める
+      if (!res.ok || !data?.result_path) {
+        setMsg(data?.message ?? data?.error ?? "diagnose failed");
         return;
       }
 
@@ -317,3 +334,4 @@ export default function DiagnosisPage() {
     </main>
   );
 }
+
